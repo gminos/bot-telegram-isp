@@ -36,7 +36,7 @@ def mikrotik_config() -> dict[str,str]:
 def obtener_datos_router(mikrotik_device: dict[str,str]) -> str:
     try:
         with ConnectHandler(**mikrotik_device) as conn:
-            output = conn.send_command("/system resource print without-paging")
+            output = str(conn.send_command("/system resource print without-paging"))
             cpu = re.search(r'cpu-load:\s+(\d+)%', output)
             uptime = re.search(r'uptime:\s+(.+)', output)
             val_cpu = cpu.group(1) if cpu else "?"
@@ -54,7 +54,7 @@ def obtener_datos_router(mikrotik_device: dict[str,str]) -> str:
 def obtener_usuarios_activos(mikrotik_device: dict[str, str]) -> str:
     try:
         with ConnectHandler(**mikrotik_device) as conn:
-            output = conn.send_command("/ppp active print terse without-paging")
+            output = str(conn.send_command("/ppp active print terse without-paging"))
 
             usuarios = re.findall(r'name=([^\s]+)', output)
 
@@ -73,10 +73,10 @@ def obtener_usuarios_activos(mikrotik_device: dict[str, str]) -> str:
 def obtener_usuarios_inactivos(mikrotik_device: dict[str, str]) -> str:
     try:
         with ConnectHandler(**mikrotik_device) as conn:
-            output_secrets = conn.send_command("/ppp secret print terse without-paging")
+            output_secrets = str(conn.send_command("/ppp secret print terse without-paging"))
             secrets = set(re.findall(r'name=([^\s]+)', output_secrets))
 
-            output_active = conn.send_command("/ppp active print terse without-paging")
+            output_active = str(conn.send_command("/ppp active print terse without-paging"))
             active = set(re.findall(r'name=([^\s]+)', output_active))
 
             inactivos = secrets - active
@@ -96,15 +96,16 @@ def obtener_usuarios_inactivos(mikrotik_device: dict[str, str]) -> str:
 def crear_secreto_mikrotik(mikrotik_device: dict[str, str], name: str, password: str, service: str = 'pppoe', profile: str = 'profile_10_mbps') -> str:
     try:
         with ConnectHandler(**mikrotik_device) as conn:
-            output_check = conn.send_command(f'/ppp secret print where name="{name}"')
+            output_check = str(conn.send_command(f'/ppp secret print where name="{name}"'))
 
             if name in output_check:
                 return f"El usuario {name} ya existe."
 
             command = f'/ppp secret add name="{name}" password="{password}" service={service} profile={profile}'
-            conn.send_command(command)
+            _ = conn.send_command(command)
 
-            output_verify = conn.send_command(f'/ppp secret print where name="{name}"')
+            output_verify = str(conn.send_command(f'/ppp secret print where name="{name}"'))
+
             if name in output_verify:
                 return f"Usuario '{name}' creado exitosamente."
             else:
@@ -219,7 +220,6 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def main() -> None:
-    
     if not USER_ID or not TELEGRAM_TOKEN:
         return
 
