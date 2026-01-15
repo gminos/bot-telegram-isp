@@ -1,6 +1,6 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, filters, ConversationHandler, MessageHandler
 from dotenv import load_dotenv
 from netmiko import ConnectHandler
 import os
@@ -15,6 +15,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+ASK_NAME, ASK_PASSWORD = range(2)
 
 def mikrotik_config() -> dict[str,str]:
     host = os.getenv('ROUTER_IP')
@@ -105,6 +107,58 @@ def obtener_usuarios_inactivos(mikrotik_device: dict[str, str]) -> str:
     except Exception as e:
         return f"Error de conexion: {str(e)}"
 
+def crear_secreto_mikrotik(mikrotik_device: dict[str, str], name: str, password: str, service: str = 'pppoe', profile: str = 'profile_10_mbps') -> str:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            output_check = conn.send_command(f'/ppp secret print where name="{name}"')
+
+            if name in output_check:
+                return f"El usuario {name} ya existe."
+
+            command = f'/ppp secret add name="{name}" password="{password}" service={service} profile={profile}'
+            conn.send_command(command)
+            
+            output_verify = conn.send_command(f'/ppp secret print where name="{name}"')
+            if name in output_verify:
+                return f"Usuario '{name}' creado exitosamente."
+            else:
+                return f"No se pudo verificar la creacion de '{name}'."
+
+    except Exception as e:
+        return f"Error al crear usuario: {str(e)}"
+
+async def start_create_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    _ = await query.answer()
+    
+    _ = await query.edit_message_text(text="Por favor, escribe el nombre del nuevo usuario:")
+    
+    return ASK_NAME
+
+async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = update.message.text
+    context.user_data['new_user_name'] = name
+    
+    _ = await update.message.reply_text(f"Genial. Ahora escribe la contrasena para {name}:")
+    
+    return ASK_PASSWORD
+
+async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    password = update.message.text
+    name = context.user_data.get('new_user_name')
+    
+    _ = await update.message.reply_text("Creando usuario en Mikrotik, por favor espera...")
+    
+    resultado = crear_secreto_mikrotik(mikrotik_config(), name, password)
+    
+    _ = await update.message.reply_text(resultado)
+    
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    _ = await update.message.reply_text("Operacion cancelada.")
+    return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.effective_chat:
         return
@@ -121,6 +175,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ],
         [
             InlineKeyboardButton("Ver Usuarios inactivos", callback_data="btn_inactivos")
+        ],
+        [
+            InlineKeyboardButton("Agregar nuevo usuario", callback_data="btn_add_user")
         ],
         [
             InlineKeyboardButton("Cancelar / Cerrar", callback_data='btn_cerrar')
@@ -179,6 +236,16 @@ def main() -> None:
 
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
 
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_create_user, pattern='^btn_add_user$')],
+        states={
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
+            ASK_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_password)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    application.add_handler(conv_handler)
     application.add_handler(CommandHandler('start', start, filters=filters.User(user_id=USER_ID)))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(CommandHandler("help", help_command, filters=filters.User(user_id=USER_ID)))
