@@ -63,6 +63,48 @@ def obtener_datos_router(mikrotik_device: dict[str,str]) -> str:
     except Exception as e:
         return f"Error de conexion: {str(e)}"
 
+def obtener_usuarios_activos(mikrotik_device: dict[str, str]) -> str:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            output = conn.send_command("/ppp active print terse without-paging")
+            
+            usuarios = re.findall(r'name=([^\s]+)', output)
+
+            if not usuarios:
+                return "No hay usuarios PPPoE activos actualmente."
+
+            lista_nombres = "\n".join([f"- {u}" for u in usuarios])
+            
+            return (
+                f"**Usuarios activos ({len(usuarios)})**\n\n"
+                f"{lista_nombres}"
+            )
+    except Exception as e:
+        return f"Error de conexion: {str(e)}"
+
+def obtener_usuarios_inactivos(mikrotik_device: dict[str, str]) -> str:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            output_secrets = conn.send_command("/ppp secret print terse without-paging")
+            secrets = set(re.findall(r'name=([^\s]+)', output_secrets))
+            
+            output_active = conn.send_command("/ppp active print terse without-paging")
+            active = set(re.findall(r'name=([^\s]+)', output_active))
+            
+            inactivos = secrets - active
+            
+            if not inactivos:
+                return "Todos los usuarios configurados estan activos."
+
+            lista_inactivos = "\n".join([f"- {u}" for u in sorted(inactivos)])
+            
+            return (
+                f"**Usuarios inactivos ({len(inactivos)})**\n\n"
+                f"{lista_inactivos}"
+            )
+    except Exception as e:
+        return f"Error de conexion: {str(e)}"
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.effective_chat:
         return
@@ -73,6 +115,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [
             InlineKeyboardButton("Ver Estado CPU", callback_data='btn_estado'),
             InlineKeyboardButton("Ver Bridge", callback_data='btn_bridge')
+        ],
+        [
+            InlineKeyboardButton("Ver Usuarios activos", callback_data="btn_activos")
+        ],
+        [
+            InlineKeyboardButton("Ver Usuarios inactivos", callback_data="btn_inactivos")
         ],
         [
             InlineKeyboardButton("Cancelar / Cerrar", callback_data='btn_cerrar')
@@ -102,6 +150,16 @@ async def button_handler(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == 'btn_bridge':
         _ = await query.edit_message_text(text="Buscando Bridge...")
         resultado = obtener_bridge(mikrotik_config())
+        _ = await query.edit_message_text(text=resultado, parse_mode="Markdown")
+
+    elif query.data == 'btn_activos':
+        _ = await query.edit_message_text(text="Buscando usuarios activos...")
+        resultado = obtener_usuarios_activos(mikrotik_config())
+        _ = await query.edit_message_text(text=resultado, parse_mode="Markdown")
+
+    elif query.data == 'btn_inactivos':
+        _ = await query.edit_message_text(text="Buscando usuarios inactivos...")
+        resultado = obtener_usuarios_inactivos(mikrotik_config())
         _ = await query.edit_message_text(text=resultado, parse_mode="Markdown")
 
     elif query.data == 'btn_cerrar':
