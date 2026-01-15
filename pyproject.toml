@@ -1,0 +1,11 @@
+[project]
+name = "learning-bot-telegram"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dotenv>=0.9.9",
+    "netmiko>=4.6.0",
+    "python-telegram-bot>=22.5",
+]
