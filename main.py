@@ -69,14 +69,14 @@ def obtener_usuarios_activos(mikrotik_device: dict[str, str]) -> str:
     try:
         with ConnectHandler(**mikrotik_device) as conn:
             output = conn.send_command("/ppp active print terse without-paging")
-            
+
             usuarios = re.findall(r'name=([^\s]+)', output)
 
             if not usuarios:
                 return "No hay usuarios PPPoE activos actualmente."
 
             lista_nombres = "\n".join([f"- {u}" for u in usuarios])
-            
+
             return (
                 f"**Usuarios activos ({len(usuarios)})**\n\n"
                 f"{lista_nombres}"
@@ -89,17 +89,17 @@ def obtener_usuarios_inactivos(mikrotik_device: dict[str, str]) -> str:
         with ConnectHandler(**mikrotik_device) as conn:
             output_secrets = conn.send_command("/ppp secret print terse without-paging")
             secrets = set(re.findall(r'name=([^\s]+)', output_secrets))
-            
+
             output_active = conn.send_command("/ppp active print terse without-paging")
             active = set(re.findall(r'name=([^\s]+)', output_active))
-            
+
             inactivos = secrets - active
-            
+
             if not inactivos:
                 return "Todos los usuarios configurados estan activos."
 
             lista_inactivos = "\n".join([f"- {u}" for u in sorted(inactivos)])
-            
+
             return (
                 f"**Usuarios inactivos ({len(inactivos)})**\n\n"
                 f"{lista_inactivos}"
@@ -117,7 +117,7 @@ def crear_secreto_mikrotik(mikrotik_device: dict[str, str], name: str, password:
 
             command = f'/ppp secret add name="{name}" password="{password}" service={service} profile={profile}'
             conn.send_command(command)
-            
+
             output_verify = conn.send_command(f'/ppp secret print where name="{name}"')
             if name in output_verify:
                 return f"Usuario '{name}' creado exitosamente."
@@ -127,35 +127,44 @@ def crear_secreto_mikrotik(mikrotik_device: dict[str, str], name: str, password:
     except Exception as e:
         return f"Error al crear usuario: {str(e)}"
 
-async def start_create_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def start_create_user(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+
+    if not query: return 0
+
     _ = await query.answer()
-    
     _ = await query.edit_message_text(text="Por favor, escribe el nombre del nuevo usuario:")
-    
+
     return ASK_NAME
 
 async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data: return 0
+
     name = update.message.text
     context.user_data['new_user_name'] = name
-    
+
     _ = await update.message.reply_text(f"Genial. Ahora escribe la contrasena para {name}:")
-    
+
     return ASK_PASSWORD
 
 async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data: return 0
+
     password = update.message.text
-    name = context.user_data.get('new_user_name')
-    
+    name = str(context.user_data.get('new_user_name'))
+
     _ = await update.message.reply_text("Creando usuario en Mikrotik, por favor espera...")
-    
+
+    if not password or not name: return 0
+
     resultado = crear_secreto_mikrotik(mikrotik_config(), name, password)
-    
     _ = await update.message.reply_text(resultado)
-    
+
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def cancel(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message: return 0
+
     _ = await update.message.reply_text("Operacion cancelada.")
     return ConversationHandler.END
 
