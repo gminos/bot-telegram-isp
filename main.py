@@ -114,6 +114,47 @@ def crear_secreto_mikrotik(mikrotik_device: dict[str, str], name: str, password:
     except Exception as e:
         return f"Error al crear usuario: {str(e)}"
 
+def suspender_usuario_mikrotik(mikrotik_device: dict[str, str], name: str) -> str:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            cmd_disable = f'/ppp secret disable "{name}"'
+            _ = conn.send_command(cmd_disable)
+            
+            cmd_remove = f'/ppp active remove [find name="{name}"]'
+            _ = str(conn.send_command(cmd_remove))
+            
+            return f"Usuario '{name}' suspendido exitosamente."
+
+    except Exception as e:
+        return f"Error al suspender usuario: {str(e)}"
+
+def activar_usuario_mikrotik(mikrotik_device: dict[str, str], name: str) -> str:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            cmd_enable = f'/ppp secret enable "{name}"'
+            _ = conn.send_command(cmd_enable)
+            return f"Usuario '{name}' reactivado exitosamente."
+    except Exception as e:
+        return f"Error al activar usuario: {str(e)}"
+
+def obtener_todos_usuarios(mikrotik_device: dict[str, str]) -> list[str]:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            output = str(conn.send_command("/ppp secret print terse without-paging"))
+            usuarios = re.findall(r'name=([^\s]+)', output)
+            return sorted(usuarios)
+    except Exception:
+        return []
+
+def obtener_usuarios_deshabilitados(mikrotik_device: dict[str, str]) -> list[str]:
+    try:
+        with ConnectHandler(**mikrotik_device) as conn:
+            output = str(conn.send_command("/ppp secret print terse where disabled=yes"))
+            usuarios = re.findall(r'name=([^\s]+)', output)
+            return sorted(usuarios)
+    except Exception:
+        return []
+
 async def start_create_user(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
 
@@ -166,13 +207,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             InlineKeyboardButton("Ver Estado CPU", callback_data='btn_estado'),
         ],
         [
-            InlineKeyboardButton("Ver Usuarios activos", callback_data="btn_activos")
-        ],
-        [
+            InlineKeyboardButton("Ver Usuarios activos", callback_data="btn_activos"),
             InlineKeyboardButton("Ver Usuarios inactivos", callback_data="btn_inactivos")
         ],
         [
-            InlineKeyboardButton("Agregar nuevo usuario", callback_data="btn_add_user")
+            InlineKeyboardButton("Agregar nuevo usuario", callback_data="btn_add_user"),
+            InlineKeyboardButton("Suspender Servicio", callback_data="btn_suspender")
+        ],
+        [
+            InlineKeyboardButton("Activar Servicio", callback_data="btn_activar")
         ],
         [
             InlineKeyboardButton("Cancelar / Cerrar", callback_data='btn_cerrar')
@@ -187,12 +230,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=reply_markup
     )
 
-async def button_handler(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+def generar_teclado_seleccion(usuarios: list[str], seleccionados: set[str], accion: str) -> InlineKeyboardMarkup:
+    keyboard = []
+    prefijo = 't_susp_' if accion == 'suspend' else 't_act_'
+    
+    for u in usuarios:
+        marca = "✅ " if u in seleccionados else ""
+        keyboard.append([InlineKeyboardButton(f"{marca}{u}", callback_data=f"{prefijo}{u}")])
+    
+    if seleccionados:
+        texto_accion = "Suspender" if accion == 'suspend' else "Activar"
+        callback_exec = 'exec_susp' if accion == 'suspend' else 'exec_act'
+        keyboard.append([InlineKeyboardButton(f" Ejecutar {texto_accion} ({len(seleccionados)})", callback_data=callback_exec)])
+    
+    keyboard.append([InlineKeyboardButton("Cancelar", callback_data='btn_cerrar')])
+    return InlineKeyboardMarkup(keyboard)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    if not query or not query.data: return
 
-    if not query: return
-
-    _ = await query.answer()
+    try:
+        if query.message:
+             _ = await query.answer()
+    except Exception:
+        pass
 
     if query.data == 'btn_estado':
         _ = await query.edit_message_text(text="Obteniendo estado del CPU...")
@@ -211,6 +273,82 @@ async def button_handler(update: Update, _context: ContextTypes.DEFAULT_TYPE) ->
 
     elif query.data == 'btn_cerrar':
         _ = await query.delete_message()
+
+    elif query.data == 'btn_suspender':
+        _ = await query.edit_message_text(text="Obteniendo lista de usuarios...")
+        usuarios = obtener_todos_usuarios(mikrotik_config())
+        
+        if not usuarios:
+             _ = await query.edit_message_text(text="No se encontraron usuarios configurados.")
+             return
+
+        context.user_data['lista_usuarios'] = usuarios
+        context.user_data['seleccionados'] = set()
+        context.user_data['accion_actual'] = 'suspend'
+
+        reply_markup = generar_teclado_seleccion(usuarios, set(), 'suspend')
+        _ = await query.edit_message_text(text="Selecciona los usuarios a SUSPENDER:", reply_markup=reply_markup)
+
+    elif query.data == 'btn_activar':
+        _ = await query.edit_message_text(text="Obteniendo lista de usuarios suspendidos...")
+        usuarios = obtener_usuarios_deshabilitados(mikrotik_config())
+        
+        if not usuarios:
+             _ = await query.edit_message_text(text="No hay usuarios suspendidos actualmente.")
+             return
+
+        context.user_data['lista_usuarios'] = usuarios
+        context.user_data['seleccionados'] = set()
+        context.user_data['accion_actual'] = 'activate'
+
+        reply_markup = generar_teclado_seleccion(usuarios, set(), 'activate')
+        _ = await query.edit_message_text(text="Selecciona los usuarios a ACTIVAR:", reply_markup=reply_markup)
+
+    elif query.data.startswith('t_susp_') or query.data.startswith('t_act_'):
+        usuario = query.data.replace('t_susp_', '').replace('t_act_', '')
+        
+        seleccionados = context.user_data.get('seleccionados', set())
+        
+        if usuario in seleccionados:
+            seleccionados.remove(usuario)
+        else:
+            seleccionados.add(usuario)
+        
+        context.user_data['seleccionados'] = seleccionados
+        
+        usuarios_base = context.user_data.get('lista_usuarios', [])
+        accion = context.user_data.get('accion_actual', 'suspend')
+        
+        reply_markup = generar_teclado_seleccion(usuarios_base, seleccionados, accion)
+        
+        try:
+             _ = await query.edit_message_reply_markup(reply_markup=reply_markup)
+        except Exception:
+            pass
+
+    elif query.data in ['exec_susp', 'exec_act']:
+        seleccionados = context.user_data.get('seleccionados', set())
+        
+        if not seleccionados:
+            _ = await query.edit_message_text("No seleccionaste ningun usuario.")
+            return
+
+        accion = query.data
+        mensaje_final = []
+        
+        _ = await query.edit_message_text(text=f"Procesando {len(seleccionados)} usuarios (esto puede tardar unos segundos)...")
+
+        for u in seleccionados:
+            if accion == 'exec_susp':
+                res = suspender_usuario_mikrotik(mikrotik_config(), u)
+            else:
+                res = activar_usuario_mikrotik(mikrotik_config(), u)
+            mensaje_final.append(f"- {res}")
+        
+        context.user_data['seleccionados'] = set()
+        
+        reporte = "\n".join(mensaje_final)
+        _ = await query.edit_message_text(text=f"**Resultado de la operacion:**\n\n{reporte}", parse_mode="Markdown")
 
 async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
